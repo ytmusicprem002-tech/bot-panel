@@ -1,22 +1,25 @@
-import { spawn } from 'child_process';
-import fs from 'fs-extra';
-import path from 'path';
+// processManager.js
+const { spawn } = require('child_process');
+const fs = require('fs-extra');
+const path = require('path');
 
 const processes = new Map();
 
-export function ensureDir(dir) {
+function ensureDir(dir) {
   fs.ensureDirSync(dir);
 }
 
-export function startScript(name, scriptPath, logDir) {
+function startScript(name, scriptPath, logDir) {
   if (processes.has(name)) throw new Error('Process already running');
 
-  const outLog = path.join(logDir, `${name}.log`);
+  const safeName = name.replace(/[^\w.-]/g, '_');
+  const outLog = path.join(logDir, `${safeName}.log`);
+  fs.ensureFileSync(outLog);
   const outStream = fs.createWriteStream(outLog, { flags: 'a' });
 
-  const child = spawn('node', [scriptPath], {
+  const child = spawn(process.execPath, [scriptPath], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env }
+    env: Object.assign({}, process.env)
   });
 
   child.stdout.on('data', (d) => outStream.write(`[OUT ${new Date().toISOString()}] ${d}`));
@@ -32,14 +35,18 @@ export function startScript(name, scriptPath, logDir) {
   return processes.get(name);
 }
 
-export function stopScript(name) {
+function stopScript(name) {
   const meta = processes.get(name);
   if (!meta) throw new Error('Not running');
-  meta.child.kill('SIGTERM');
+  try {
+    meta.child.kill('SIGTERM');
+  } catch (e) {
+    try { meta.child.kill(); } catch (ee) {}
+  }
   return true;
 }
 
-export function listRunning() {
+function listRunning() {
   const arr = [];
   for (const [name, v] of processes.entries()) {
     arr.push({ name, pid: v.pid, startedAt: v.startedAt });
@@ -47,6 +54,14 @@ export function listRunning() {
   return arr;
 }
 
-export function isRunning(name) {
+function isRunning(name) {
   return processes.has(name);
 }
+
+module.exports = {
+  ensureDir,
+  startScript,
+  stopScript,
+  listRunning,
+  isRunning
+};
