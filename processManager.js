@@ -1,105 +1,46 @@
-// processManager.js
+// di processManager.js (CommonJS)
 const { spawn } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
 
-const processes = new Map(); // name -> meta
+const processes = new Map();
 
-function ensureDir(dir) {
-  fs.ensureDirSync(dir);
-}
+function startProject(name, command, cwd, logDir, opts = {}) {
+  const sname = String(name).replace(/[^a-zA-Z0-9._-]/g,'_');
+  if (processes.has(sname)) throw new Error('Project already running');
 
-function safeName(name) {
-  return String(name).replace(/[^a-zA-Z0-9._-]/g, '_');
-}
-
-function startScript(name, scriptPath, logDir, opts = {}) {
-  const sname = safeName(name);
-  if (processes.has(sname)) throw new Error('Process already running');
-
-  if (!fs.existsSync(scriptPath)) throw new Error('Script file not found');
-
+  fs.ensureDirSync(logDir);
   const outLog = path.join(logDir, `${sname}.log`);
-  fs.ensureFileSync(outLog);
   const outStream = fs.createWriteStream(outLog, { flags: 'a' });
 
-  // use node executable that runs the current process
-  const nodeExec = process.execPath;
+  // run command via shell so it can be 'npm start' or 'node src/index.js'
+  const child = spawn(command, { shell: true, cwd, env: Object.assign({}, process.env, opts.env || {}), stdio: ['ignore','pipe','pipe'] });
 
-  // spawn node <scriptPath>
-  const child = spawn(nodeExec, [scriptPath], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: Object.assign({}, process.env, opts.env || {})
-  });
+  child.stdout.on('data', d => outStream.write(`[OUT ${new Date().toISOString()}] ${d}`));
+  child.stderr.on('data', d => outStream.write(`[ERR ${new Date().toISOString()}] ${d}`));
 
-  child.stdout.on('data', (d) => {
-    outStream.write(`[OUT ${new Date().toISOString()}] ${d}`);
-  });
-  child.stderr.on('data', (d) => {
-    outStream.write(`[ERR ${new Date().toISOString()}] ${d}`);
-  });
-
-  child.on('exit', (code, signal) => {
-    outStream.write(`[EXIT ${new Date().toISOString()}] code=${code} signal=${signal}\n`);
-    // if requested autoRestart, restart once after short delay
-    const meta = processes.get(sname);
+  child.on('exit', (code, sig) => {
+    outStream.write(`[EXIT ${new Date().toISOString()}] code=${code} sig=${sig}\n`);
     processes.delete(sname);
     outStream.end();
-    if (meta && meta.autoRestart && !meta.stoppedManually) {
-      // spawn restart after small delay
-      setTimeout(() => {
-        try {
-          startScript(name, scriptPath, logDir, opts);
-        } catch (e) {
-          // write error to log file
-          fs.appendFileSync(outLog, `[RESTART-ERROR ${new Date().toISOString()}] ${e.message}\n`);
-        }
-      }, 1500);
+    if (opts.autoRestart && !opts.stoppedManually) {
+      setTimeout(()=> startProject(name, command, cwd, logDir, opts), 1500);
     }
   });
 
-  processes.set(sname, {
-    child,
-    outLog,
-    pid: child.pid,
-    startedAt: Date.now(),
-    autoRestart: !!opts.autoRestart,
-    stoppedManually: false
-  });
-
+  processes.set(sname, { child, pid: child.pid, startedAt: Date.now(), outLog, cwd });
   return processes.get(sname);
 }
 
-function stopScript(name) {
-  const sname = safeName(name);
+function stopProject(name) {
+  const sname = String(name).replace(/[^a-zA-Z0-9._-]/g,'_');
   const meta = processes.get(sname);
   if (!meta) throw new Error('Not running');
-  meta.stoppedManually = true;
-  try {
-    meta.child.kill('SIGTERM');
-  } catch (e) {
-    try { meta.child.kill(); } catch (ee) {}
-  }
+  meta.child.kill('SIGTERM');
   return true;
 }
 
-function listRunning() {
-  const arr = [];
-  for (const [name, v] of processes.entries()) {
-    arr.push({ name, pid: v.pid, startedAt: v.startedAt, autoRestart: v.autoRestart });
-  }
-  return arr;
-}
+function isProjectRunning(name){ return processes.has(String(name).replace(/[^a-zA-Z0-9._-]/g,'_')); }
+function listProjectsRunning(){ return Array.from(processes.entries()).map(([k,v])=>({ name:k, pid:v.pid, startedAt:v.startedAt })); }
 
-function isRunning(name) {
-  return processes.has(safeName(name));
-}
-
-module.exports = {
-  ensureDir,
-  startScript,
-  stopScript,
-  listRunning,
-  isRunning,
-  safeName
-};
+module.exports = { startProject, stopProject, isProjectRunning, listProjectsRunning };
