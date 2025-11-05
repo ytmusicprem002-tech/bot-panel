@@ -155,4 +155,14 @@ app.get('/api/running', auth, (req, res) => {
   res.json({ success: true, running: listRunning() });
 });
 
+// HEALTH CHECK (tanpa API key)
+app.get('/', (req, res) => {
+  res.status(200).json({ ok: true, service: 'panel-runner', time: new Date().toISOString() });
+});
+
+// OPTIONAL: Deployra sometimes checks this path specifically
+app.get('/health', (req, res) => {
+  res.status(200).json({ ok: true });
+});
+
 app.listen(PORT, () => console.log(`Runner listening on port ${PORT}`));
