@@ -10,7 +10,8 @@ const {
   startScript,
   stopScript,
   listRunning,
-  isRunning
+  isRunning,
+  safeName
 } = require('./processManager');
 
 const app = express();
@@ -22,19 +23,21 @@ const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY || 'supersecret123';
 const SCRIPTS_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'scripts');
 const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
-const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '2000000', 10);
+const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '4000000', 10); // 4MB default
 
+// create folders
 ensureDir(SCRIPTS_DIR);
 ensureDir(LOG_DIR);
 ensureDir(path.join(__dirname, 'uploads'));
 
+// simple auth middleware: accept apikey in body/query/header 'x-api-key'
 function auth(req, res, next) {
-  const key = (req.body && req.body.apikey) || req.query.key || req.query.apikey || req.headers['x-api-key'];
+  const key = (req.body && req.body.apikey) || req.query.apikey || req.query.key || req.headers['x-api-key'];
   if (!key || key !== API_KEY) return res.status(403).json({ success: false, error: 'Invalid API key' });
   next();
 }
 
-// multer upload config
+// multer config
 const upload = multer({
   dest: path.join(__dirname, 'uploads'),
   limits: { fileSize: MAX_FILE_SIZE },
@@ -44,29 +47,29 @@ const upload = multer({
   }
 });
 
-// Health / status
+// HEALTH
 app.get('/status', auth, (req, res) => {
   res.json({ success: true, msg: 'runner ok' });
 });
 
-// Upload script
+// UPLOAD
 app.post('/api/upload', auth, upload.single('script'), async (req, res) => {
   try {
     const file = req.file;
-    if (!file) return res.status(400).json({ success: false, error: 'No file uploaded' });
+    if (!file) return res.status(400).json({ success: false, error: 'No file' });
 
     const provided = req.body.name && String(req.body.name).trim();
     const name = provided ? provided.replace(/[^a-zA-Z0-9._-]/g, '_') : file.originalname;
     const dest = path.join(SCRIPTS_DIR, name);
 
     await fs.move(file.path, dest, { overwrite: true });
-    res.json({ success: true, message: 'Uploaded', name });
+    return res.json({ success: true, message: 'Uploaded', name });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// List scripts
+// LIST
 app.get('/api/list', auth, async (req, res) => {
   try {
     const files = await fs.readdir(SCRIPTS_DIR);
@@ -77,7 +80,7 @@ app.get('/api/list', auth, async (req, res) => {
   }
 });
 
-// Download script
+// DOWNLOAD
 app.get('/api/download', auth, async (req, res) => {
   try {
     const name = req.query.name;
@@ -90,7 +93,7 @@ app.get('/api/download', auth, async (req, res) => {
   }
 });
 
-// Save/edit script content
+// SAVE / EDIT
 app.post('/api/save', auth, async (req, res) => {
   try {
     const { name, content } = req.body;
@@ -104,21 +107,22 @@ app.post('/api/save', auth, async (req, res) => {
   }
 });
 
-// Start script
+// START (body: { name, autoRestart (optional bool) })
 app.post('/api/start', auth, async (req, res) => {
   try {
     const name = req.body.name;
+    const autoRestart = !!req.body.autoRestart;
     if (!name) return res.status(400).json({ success: false, error: 'name required' });
     const scriptPath = path.join(SCRIPTS_DIR, name);
     if (!await fs.pathExists(scriptPath)) return res.status(404).json({ success: false, error: 'not found' });
-    const meta = startScript(name, scriptPath, LOG_DIR);
+    const meta = startScript(name, scriptPath, LOG_DIR, { autoRestart });
     res.json({ success: true, pid: meta.pid, message: 'Started' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Stop script
+// STOP
 app.post('/api/stop', auth, async (req, res) => {
   try {
     const { name } = req.body;
@@ -130,13 +134,13 @@ app.post('/api/stop', auth, async (req, res) => {
   }
 });
 
-// Logs tail
+// LOGS (tail by characters)
 app.get('/api/logs', auth, async (req, res) => {
   try {
     const name = req.query.name;
-    const tail = parseInt(req.query.tail || '2000', 10);
+    const tail = parseInt(req.query.tail || '4000', 10);
     if (!name) return res.status(400).json({ success: false, error: 'name required' });
-    const logFile = path.join(LOG_DIR, `${name}.log`);
+    const logFile = path.join(LOG_DIR, `${safeName(name)}.log`);
     if (!await fs.pathExists(logFile)) return res.json({ success: true, logs: '' });
     const data = await fs.readFile(logFile, 'utf8');
     const out = data.slice(-tail);
@@ -146,7 +150,7 @@ app.get('/api/logs', auth, async (req, res) => {
   }
 });
 
-// Simple list running processes (diagnostic)
+// DIAGNOSTIC: list running
 app.get('/api/running', auth, (req, res) => {
   res.json({ success: true, running: listRunning() });
 });
