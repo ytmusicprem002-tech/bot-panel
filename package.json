@@ -2,9 +2,9 @@
   "name": "ptero-lite-runner",
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
+  "main": "app.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node app.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
